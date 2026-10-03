@@ -1,0 +1,24 @@
+#!/bin/bash
+# 卸载后：按向导选择决定是否清理数据。
+#
+# 规范要求：不得擅自删除用户数据，也不得删除应用目录之外不属于自己的内容。
+# 因此默认保留 var，只有用户在卸载向导里明确选择删除才清理。
+set -u
+
+PKG_VAR="${TRIM_PKGVAR:-}"
+PKG_TMP="${TRIM_PKGTMP:-}"
+KEEP="${wizard_keep_data:-true}"
+
+# 无论是否保留数据，运行期残留文件都要清掉
+[ -n "$PKG_TMP" ] && rm -f "${PKG_TMP}/app.sock" 2>/dev/null
+[ -n "$PKG_VAR" ] && rm -f "${PKG_VAR}/cfddns.pid" 2>/dev/null
+
+if [ "$KEEP" = "false" ]; then
+  # 只删本应用自己的运行目录，且必须是预期的绝对路径
+  case "$PKG_VAR" in
+    /*@appdata/cfddns*) rm -rf "$PKG_VAR" 2>/dev/null ;;
+    *) : ;; # 路径不符合预期时不删，宁可留下数据
+  esac
+fi
+
+exit 0

@@ -1,0 +1,54 @@
+[
+  {
+    "stepTitle": "填写 Cloudflare 信息",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "cfddns 会把本机公网 IP 自动同步到 Cloudflare 的 DNS 记录。<br>令牌在 Cloudflare 后台「我的个人资料 → API 令牌」创建，使用 <b>Edit zone DNS</b> 模板，权限只需 <b>Zone → DNS → Edit</b>，资源只勾选自己的域名。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_token",
+        "label": "Cloudflare API 令牌",
+        "rules": [
+          { "required": true, "message": "请填写 API 令牌" },
+          { "min": 20, "message": "令牌长度不正确，通常为 40 个字符以上" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_zone",
+        "label": "要绑定的域名",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请填写要绑定的域名" },
+          { "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$", "message": "请输入形如 example.com 的域名" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_records",
+        "label": "要更新的记录名",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请至少填写一个记录名" }
+        ]
+      },
+      {
+        "type": "radio",
+        "field": "wizard_ip_mode",
+        "label": "绑定哪类 IP",
+        "initValue": "both",
+        "options": [
+          { "label": "IPv4（A 记录）", "value": "v4" },
+          { "label": "IPv6（AAAA 记录）", "value": "v6" },
+          { "label": "两者都绑定（推荐）", "value": "both" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "记录名填相对域名的部分：<b>pc</b> 表示 pc.你的域名，<b>@</b> 表示根域名，<b>*</b> 表示泛解析。多个记录名用英文逗号分隔，例如 <b>pc,nas</b>。<br>没有公网 IPv4 的家庭宽带请选 <b>IPv6</b>。<br>安装后可在「应用设置」中随时修改，包括逐条记录分别指定协议。"
+      }
+    ]
+  }
+]

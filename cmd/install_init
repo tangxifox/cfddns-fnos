@@ -1,0 +1,30 @@
+#!/bin/bash
+# 安装前：记录运行环境。
+#
+# 这里只记录诊断信息，不做架构许可判断。原因有两点：
+#   1. fnOS 的 TRIM_SYS_ARCH 用的是 manifest platform 那套取值（x86 / arm），
+#      并非 Linux 内核风格的 x86_64 / aarch64，按后者写白名单会误伤正常设备。
+#   2. 架构兼容性由 fnOS 依据 manifest 的 platform 自行校验。安装脚本再判
+#      一次属于重复逻辑，且容易因取值口径不同而误杀。
+set -u
+
+{
+  echo "安装 cfddns"
+  echo "  TRIM_SYS_ARCH       = ${TRIM_SYS_ARCH:-未知}"
+  echo "  TRIM_SYS_VERSION    = ${TRIM_SYS_VERSION:-未知}"
+  echo "  TRIM_KERNEL_VERSION = ${TRIM_KERNEL_VERSION:-未知}"
+  echo "  TRIM_SYS_MACHINE_ID = ${TRIM_SYS_MACHINE_ID:-未知}"
+} >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+
+# 只拦明显不属于本应用支持范围的架构（既非 64 位 x86 也非 64 位 ARM）。
+case "${TRIM_SYS_ARCH:-}" in
+  "" | x86 | x86_64 | amd64 | X86 | X86_64 | AMD64 | \
+  arm | arm64 | aarch64 | ARM | ARM64 | AARCH64)
+    exit 0
+    ;;
+  *)
+    echo "本应用只提供 64 位 x86 与 ARM 版本，检测到架构：${TRIM_SYS_ARCH}。" \
+      >>"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    exit 1
+    ;;
+esac

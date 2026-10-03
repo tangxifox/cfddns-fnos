@@ -1,0 +1,10 @@
+# 由 GitHub 自动生成 Release 说明时的分类规则。
+# 项目采用单一提交（squash）风格，全部内容属于同一类，因此只保留一个分类。
+changelog:
+  categories:
+    - title: 更新内容
+      labels:
+        - '*'
+  exclude:
+    labels:
+      - 跳过

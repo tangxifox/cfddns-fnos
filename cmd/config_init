@@ -1,0 +1,10 @@
+#!/bin/bash
+# 配置变更前：停止服务，保证配置写入时不与运行中的进程竞争。
+set -u
+
+CMD_MAIN="$(dirname "$(dirname "${TRIM_APPDEST}")")/cmd/main"
+if [ -x "$CMD_MAIN" ]; then
+  "$CMD_MAIN" stop >/dev/null 2>&1 || true
+fi
+
+exit 0

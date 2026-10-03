@@ -1,0 +1,13 @@
+#!/bin/bash
+# 升级前：停止服务，避免替换文件时进程仍在运行。
+set -u
+
+APP_DIR="${TRIM_APPDEST:?缺少 TRIM_APPDEST}"
+[ -x "${APP_DIR}/../cmd/main" ] || true
+
+CMD_MAIN="$(dirname "$(dirname "${TRIM_APPDEST}")")/cmd/main"
+if [ -x "$CMD_MAIN" ]; then
+  "$CMD_MAIN" stop >/dev/null 2>&1 || true
+fi
+
+exit 0

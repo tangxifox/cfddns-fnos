@@ -1,0 +1,15 @@
+appname=cfddns
+version=1.0.0
+display_name=cfddns 动态域名
+desc=把本机公网 IP 自动同步到 Cloudflare 的 A / AAAA 记录。封装官方 cfddns 二进制，支持 IPv4 / IPv6 自动探测、多条记录与定时同步。
+source=thirdparty
+platform=x86
+maintainer=tangxifox
+maintainer_url=https://github.com/tangxifox
+distributor=tangxifox
+distributor_url=https://github.com/tangxifox/cfddns-fnos
+os_min_version=1.1.8
+ctl_stop=true
+checkport=false
+desktop_uidir=ui
+changelog=首个版本。把本机公网 IP 自动同步到 Cloudflare 的 A / AAAA 记录，以命令行方式运行，封装官方 cfddns 二进制（与上游发布逐字节一致）。安装向导可填写 Cloudflare API 令牌、要绑定的域名、要更新的记录名，并选择绑定 IPv4（A 记录）、IPv6（AAAA 记录）或两者都绑定；默认每 5 分钟自动同步一次，间隔可在应用设置中调整；应用入口提供运行状态查询。

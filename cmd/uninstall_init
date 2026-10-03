@@ -1,0 +1,10 @@
+#!/bin/bash
+# 卸载前：停止服务。应用文件此时仍在。
+set -u
+
+CMD_MAIN="$(dirname "$(dirname "${TRIM_APPDEST}")")/cmd/main"
+if [ -x "$CMD_MAIN" ]; then
+  "$CMD_MAIN" stop >/dev/null 2>&1 || true
+fi
+
+exit 0

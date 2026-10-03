@@ -1,0 +1,204 @@
+name: 构建飞牛fpk
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # 先做静态检查：脚本语法、JSON 合法性、清单与入口一致性。
+  # 这些是最容易在真机上才暴露、但完全可以在 CI 阶段拦下的问题。
+  check:
+    name: 检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck 脚本
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning cmd/* tool/*.sh build-fpk.sh
+
+      - name: bash 语法
+        run: for f in cmd/* tool/*.sh build-fpk.sh; do bash -n "$f" || exit 1; done
+
+      - name: Python 语法
+        run: python3 -m py_compile tool/gen-icons.py
+
+      - name: 校验 JSON 文件
+        run: |
+          for f in config/privilege config/resource app/ui/config \
+                   wizard/install wizard/config wizard/uninstall wizard/upgrade; do
+            python3 -c "import json,sys; json.load(open('$f'))" && echo "OK  $f"
+          done
+
+      - name: 校验 manifest 与入口一致性
+        run: |
+          set -e
+          test -f manifest
+          # desktop_applaunchname 刻意不声明：应用中心的「打开」按钮取决于它，
+          # 本应用没有网页界面，声明了就会多出一个点开无内容的按钮。
+          for k in appname version display_name desc source platform desktop_uidir; do
+            grep -q "^${k}=" manifest || { echo "manifest 缺少 $k"; exit 1; }
+          done
+          if grep -q '^desktop_applaunchname=' manifest; then
+            echo "::error::manifest 声明了 desktop_applaunchname：无界面应用会出现「打开」按钮"
+            exit 1
+          fi
+          # fnpack 强制要求 app/ui/config 存在，缺了会直接打包失败。
+          test -f app/ui/config || { echo "::error::缺少 app/ui/config，fnpack 会拒绝打包"; exit 1; }
+          python3 - <<'PY'
+          import json
+          urls = json.load(open("app/ui/config")).get(".url", {})
+          assert urls, "app/ui/config 的 .url 为空"
+          for key, entry in urls.items():
+              assert entry.get("gatewaySocket"), f"{key} 缺少 gatewaySocket"
+              assert entry.get("gatewayPrefix", "").startswith("/app/"), f"{key} gatewayPrefix 不合规"
+          print("入口配置正确（无 applaunchname，应用中心不显示打开按钮）：", list(urls))
+          PY
+
+      - name: 校验图标
+        run: |
+          python3 - <<'PY'
+          import struct, os
+          for path, want in [("ICON.PNG", 64), ("ICON_256.PNG", 256)]:
+              assert os.path.exists(path), f"{path} 不存在"
+              b = open(path, "rb").read()
+              assert b[:8] == b"\x89PNG\r\n\x1a\n", f"{path} 不是 PNG"
+              w, h = struct.unpack(">II", b[16:24])
+              assert (w, h) == (want, want), f"{path} 尺寸为 {w}x{h}，要求 {want}x{want}"
+              kb = len(b) / 1024
+              assert kb <= 1024, f"{path} 体积 {kb:.0f}KB 超过限制"
+              print(f"OK  {path} {w}x{h} {kb:.1f}KB")
+          PY
+
+  build:
+    name: 构建应用包 (${{ matrix.arch }})
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: x86
+          - arch: arm64
+            platform: arm
+    steps:
+      - uses: actions/checkout@v4
+
+      # 封装的是官方仓库发布的二进制，不在 CI 里自行编译。
+      # build-fpk.sh 会下载并对照官方 SHA256SUMS.txt 校验。
+
+      - name: 安装 fnpack
+        run: bash ./tool/install-fnpack.sh
+
+      - name: 打包
+        env:
+          # 必须显式传入：build-fpk.sh 缺省为 amd64，漏传会让两个矩阵项
+          # 产出同一份 x86-64 内容，而包名与 manifest 却写着 arm。
+          FNOS_GOARCH: ${{ matrix.arch }}
+        run: |
+          chmod +x cmd/* tool/*.sh build-fpk.sh tool/gen-icons.py
+          ./build-fpk.sh
+          ls -l dist/
+          # 正式包与开发包必须能区分：CI 应当产出 .fpk
+          if ! ls dist/*.fpk >/dev/null 2>&1; then
+            echo "::error::未产出 .fpk，只生成了开发包"
+            exit 1
+          fi
+          # 两个架构的 fpk 默认同名，合并下载时会互相覆盖丢掉一个，
+          # 因此统一加上版本与架构后缀。
+          VERSION=$(sed -n 's/^version=//p' manifest | head -n 1)
+          for f in dist/*.fpk; do
+            [ -e "$f" ] || continue
+            base="cfddns-${VERSION}-${{ matrix.arch }}.fpk"
+            mv "$f" "dist/$base"
+            echo "重命名 -> $base"
+          done
+          ls -l dist/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfddns-fnos-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 汇总
+        run: |
+          cd dist
+          echo "下载到的产物:"
+          ls -l
+          # 两个架构都必须在，否则说明又发生了同名覆盖
+          n=$(ls *.fpk 2>/dev/null | wc -l)
+          echo "fpk 数量: $n"
+          if [ "$n" -lt 2 ]; then
+            echo "::error::只找到 $n 个 fpk，架构包可能被同名覆盖了"
+            exit 1
+          fi
+          sha256sum ./*.fpk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # 说明正文取自 manifest 的 changelog 字段，避免自动生成的
+      # 「Full Changelog」之类内容混进发布说明。
+      - name: 生成发布说明
+        run: |
+          set -e
+          CHANGELOG=$(sed -n 's/^changelog=//p' manifest | head -n 1)
+          {
+            echo "## cfddns 飞牛 fnOS 应用"
+            echo
+            echo "把本机公网 IP 自动同步到 Cloudflare 的 A / AAAA 记录。"
+            echo "以命令行方式运行，封装官方 [cfddns](https://github.com/tangxifox/cfddns)"
+            echo "发布的二进制（与上游发布逐字节一致）。"
+            echo
+            echo "### 更新内容"
+            echo
+            echo "${CHANGELOG:-首个版本。}"
+            echo
+            echo "### 安装与配置"
+            echo
+            echo "1. 在飞牛**应用中心 → 手动安装**中上传对应的 .fpk；"
+            echo "2. 按向导填写 Cloudflare API 令牌、要绑定的域名、要更新的记录名，"
+            echo "   并选择绑定 **IPv4** / **IPv6** / 两者都绑定；"
+            echo "3. 安装完成后应用自动启动，默认每 5 分钟同步一次。"
+            echo
+            echo "本应用没有网页界面，应用中心里只有**禁用 / 启动**操作，没有打开按钮。"
+            echo "修改配置请进入**应用中心的「设置」**，或直接编辑配置文件"
+            echo "\`/vol1/@appconf/cfddns/config.yaml\` 后重启应用。"
+            echo
+            echo "### 下载"
+            echo
+            echo "| 文件 | 适用架构 |"
+            echo "| --- | --- |"
+            echo "| \`cfddns-${GITHUB_REF_NAME#v}-amd64.fpk\` | x86_64（Intel / AMD） |"
+            echo "| \`cfddns-${GITHUB_REF_NAME#v}-arm64.fpk\` | ARM64 |"
+            echo
+            echo "同一 Release 内的 \`SHA256SUMS.txt\` 可用于校验完整性。"
+          } > /tmp/release-body.md
+          cat /tmp/release-body.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: /tmp/release-body.md

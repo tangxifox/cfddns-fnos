@@ -1,0 +1,43 @@
+[
+  {
+    "stepTitle": "修改 Cloudflare 配置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "留空表示保持原值不变。配置也可直接编辑 <b>etc/config.yaml</b>，改完重启应用生效。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_token",
+        "label": "Cloudflare API 令牌（留空则不改）"
+      },
+      {
+        "type": "text",
+        "field": "wizard_zone",
+        "label": "要绑定的域名（留空则不改）"
+      },
+      {
+        "type": "text",
+        "field": "wizard_records",
+        "label": "要更新的记录名（留空则不改）",
+        "rules": []
+      },
+      {
+        "type": "radio",
+        "field": "wizard_ip_mode",
+        "label": "绑定哪类 IP",
+        "initValue": "",
+        "options": [
+          { "label": "保持当前设置", "value": "" },
+          { "label": "IPv4（A 记录）", "value": "v4" },
+          { "label": "IPv6（AAAA 记录）", "value": "v6" },
+          { "label": "两者都绑定", "value": "both" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "填写记录名会<b>替换</b>现有记录列表，多个用英文逗号分隔。<br>选择「绑定哪类 IP」会对所有记录统一生效：选 IPv4 只创建 A 记录，选 IPv6 只创建 AAAA 记录。<br>仅需要部分记录用 IPv6、部分用 IPv4 时，请直接编辑 etc/config.yaml，每条形如 <b>- name: pc</b> 加 <b>type: AAAA</b>。"
+      }
+    ]
+  }
+]

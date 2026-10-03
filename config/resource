@@ -1,0 +1,17 @@
+{
+  "//": "本应用不需要 fnOS 的共享目录、系统链接、Docker 项目或开放 API scope，因此不声明任何资源项。",
+  "//network": "下面的 network 段不是 fnOS 的文档化字段（fnpack 会忽略它），保留仅为记录本应用实际访问的外网域名，便于人工审计出网范围。",
+  "network": {
+    "outbound": [
+      "api.cloudflare.com",
+      "www.cloudflare.com",
+      "ipv6.cloudflare.com",
+      "api.ipify.org",
+      "ipv4.icanhazip.com",
+      "ipv4.ident.me",
+      "api64.ipify.org",
+      "ipv6.icanhazip.com",
+      "ipv6.ident.me"
+    ]
+  }
+}

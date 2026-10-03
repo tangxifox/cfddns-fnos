@@ -1,0 +1,25 @@
+[
+  {
+    "stepTitle": "卸载选项",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "卸载会停止 cfddns 服务。以下是关于数据的处理选择。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_keep_data",
+        "label": "运行数据",
+        "initValue": "true",
+        "options": [
+          { "label": "保留运行数据（推荐）", "value": "true" },
+          { "label": "删除运行数据和日志", "value": "false" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "无论选择哪一项，都不会删除 Cloudflare 上的 DNS 记录。<br>如需清理，请到 Cloudflare 后台手动删除对应的 A / AAAA 记录。"
+      }
+    ]
+  }
+]

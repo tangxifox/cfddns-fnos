@@ -1,0 +1,199 @@
+#!/bin/bash
+# cfddns 飞牛 fnOS 应用 —— 生命周期脚本：start / stop / status
+#
+# 进程构成（只有一个）：
+#   ${TRIM_APPDEST}/web/cfddns-web
+#     提供网页管理界面，并按间隔调用官方 cfddns 二进制执行同步。
+#
+# 二进制来源：
+#   ${TRIM_APPDEST}/cfddns    官方 https://github.com/tangxifox/cfddns
+#                             发布件，打包时经官方 SHA256SUMS.txt 校验
+#   ${TRIM_APPDEST}/web/cfddns-web
+#                             本仓库的网页后端，只做配置读写与调用官方二进制
+#
+# 约定（fnOS 规范）：
+#   status 运行中 exit 0，未运行 exit 3，其它非零表示错误
+#   用户可见错误写入 $TRIM_TEMP_LOGFILE
+#   幂等：重复 start/stop 都安全
+
+set -u
+
+PKG_VAR="${TRIM_PKGVAR:?缺少 TRIM_PKGVAR}"
+PKG_ETC="${TRIM_PKGETC:?缺少 TRIM_PKGETC}"
+PKG_TMP="${TRIM_PKGTMP:?缺少 TRIM_PKGTMP}"
+APPDEST="${TRIM_APPDEST:-}"
+
+PID_FILE="${PKG_VAR}/cfddns.pid"
+LOG_FILE="${PKG_VAR}/cfddns.log"
+CONF_FILE="${PKG_ETC}/config.yaml"
+INTERVAL="${cfddns_interval:-5m}"
+
+fail() {
+  echo "$1" >>"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+  exit 1
+}
+
+# 定位文件。fnpack 会把 app/ 下的内容打进 app.tgz 并带一个以 appname 命名的
+# 顶层目录，因此 app/web 会落在 ${TRIM_APPDEST}/web。逐个候选校验
+# 「是普通文件且可执行」，避免拿到同名目录。
+find_bin() {
+  local c
+  for c in "$@"; do
+    [ -n "$c" ] || continue
+    if [ -f "$c" ] && [ -x "$c" ]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+WEB_BIN=$(find_bin \
+  "${APPDEST}/web/cfddns-web" \
+  "${APPDEST}/cfddns-web" \
+  "${APPDEST}/web/cfddns" || true)
+
+CF_BIN=$(find_bin \
+  "${APPDEST}/cfddns/cfddns" \
+  "${APPDEST}/cfddns" \
+  "${APPDEST}/bin/cfddns" || true)
+
+dump_paths() {
+  {
+    echo "  TRIM_APPDEST=${APPDEST:-未设置}"
+    echo "  网页后端=${WEB_BIN:-未找到}"
+    echo "  官方二进制=${CF_BIN:-未找到}"
+    echo "  目录内容:"
+    ls -la "${APPDEST:-/}" 2>&1 | sed 's/^/    /'
+    ls -la "${APPDEST:-/}/web" 2>&1 | sed 's/^/    /'
+  } >>"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+}
+
+pid_of_web() {
+  local pid exe
+  for pid in $(pgrep -f -- "$WEB_BIN" 2>/dev/null); do
+    [ -r "/proc/${pid}/exe" ] || continue
+    exe=$(readlink -f "/proc/${pid}/exe" 2>/dev/null) || continue
+    [ "$exe" = "$WEB_BIN" ] && { echo "$pid"; return 0; }
+  done
+  return 1
+}
+
+is_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid=$(tr -d '[:space:]' <"$PID_FILE" 2>/dev/null)
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [ -r "/proc/${pid}/exe" ]; then
+    [ "$(readlink -f "/proc/${pid}/exe" 2>/dev/null)" = "$WEB_BIN" ] || return 1
+  fi
+  return 0
+}
+
+case "${1:-}" in
+start)
+  mkdir -p "$PKG_VAR" "$PKG_ETC" "$PKG_TMP" 2>/dev/null
+
+  if is_running; then
+    exit 0 # 幂等
+  fi
+
+  if [ -z "$WEB_BIN" ] || [ -z "$CF_BIN" ]; then
+    dump_paths
+    fail "启动失败：未找到可执行文件（网页后端或官方二进制缺失，详见日志）"
+  fi
+
+  # 决定运行用户：显式指定，不能由「当前是谁」决定。
+  # fnOS 可能以 root 调用脚本，若直接以 root 长跑服务会违背最小权限。
+  RUN_AS="${TRIM_RUN_USERNAME:-}"
+  if [ -z "$RUN_AS" ] && [ "$(id -u)" = "0" ] && id cfddns >/dev/null 2>&1; then
+    RUN_AS=cfddns
+  fi
+  [ "$(id -un 2>/dev/null)" = "$RUN_AS" ] && RUN_AS=""
+
+  RUNNER=""
+  if [ -n "$RUN_AS" ]; then
+    if command -v runuser >/dev/null 2>&1; then
+      RUNNER="runuser -u $RUN_AS --"
+    elif command -v su >/dev/null 2>&1; then
+      RUNNER="su -s /bin/sh $RUN_AS -c"
+    else
+      fail "需要以用户 ${RUN_AS} 运行，但系统里既没有 runuser 也没有 su。"
+    fi
+  fi
+
+  : >"$LOG_FILE" 2>/dev/null || true
+  rm -f "$PID_FILE"
+
+  # Socket 位置与 app/ui/config 的 gatewaySocket 声明保持一致：
+  # 该声明的 "app.sock" 是相对应用目录的文件名，因此直接建在 TRIM_APPDEST 下。
+  # 不再额外建到 tmp/ —— 应用不声明 desktop_applaunchname，没有界面入口，
+  # 网关不会来连它；多建几份只是留下多余文件。
+  SOCK_FILE="${APPDEST}/app.sock"
+  rm -f "$SOCK_FILE" 2>/dev/null
+
+  # shellcheck disable=SC2086
+  setsid $RUNNER "$WEB_BIN" \
+    --config "$CONF_FILE" \
+    --bin "$CF_BIN" \
+    --socket "$SOCK_FILE" \
+    --interval "$INTERVAL" \
+    >>"$LOG_FILE" 2>&1 &
+  LAUNCH_PID=$!
+
+  # 等真正的服务进程出现（runuser 包装进程的 exe 不指向本程序，不会命中）
+  PID=""
+  for _ in $(seq 1 60); do
+    sleep 0.25
+    PID=$(pid_of_web || true)
+    [ -n "$PID" ] && break
+    if ! kill -0 "$LAUNCH_PID" 2>/dev/null && [ -z "$(pid_of_web || true)" ]; then
+      break
+    fi
+  done
+
+  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+    {
+      echo "cfddns 网页服务启动失败"
+      echo "  网页后端  : ${WEB_BIN}"
+      echo "  官方二进制: ${CF_BIN}"
+      echo "  运行用户  : ${RUN_AS:-$(id -un)}"
+      echo "  配置      : ${CONF_FILE}"
+      echo "  日志末尾:"
+      tail -n 20 "$LOG_FILE" 2>/dev/null | sed 's/^/    /'
+    } >>"${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+    fail "服务启动失败，详见日志 ${LOG_FILE}"
+  fi
+
+  echo "$PID" >"$PID_FILE"
+  exit 0
+  ;;
+
+stop)
+  if is_running; then
+    PID=$(tr -d '[:space:]' <"$PID_FILE")
+    kill -TERM "$PID" 2>/dev/null
+    for _ in $(seq 1 40); do
+      sleep 0.25
+      kill -0 "$PID" 2>/dev/null || break
+    done
+    kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null
+  fi
+  for p in $(pid_of_web 2>/dev/null); do kill -TERM "$p" 2>/dev/null || true; done
+  sleep 0.3
+  for p in $(pid_of_web 2>/dev/null); do kill -KILL "$p" 2>/dev/null || true; done
+  rm -f "$PID_FILE" "${APPDEST}/app.sock" 2>/dev/null
+  exit 0
+  ;;
+
+status)
+  is_running && [ -S "${APPDEST}/app.sock" ] && exit 0
+  exit 3
+  ;;
+
+*)
+  echo "用法: $0 {start|stop|status}" >&2
+  exit 1
+  ;;
+esac

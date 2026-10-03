@@ -1,0 +1,127 @@
+#!/bin/bash
+# 配置变更后：把向导输入合并进配置，然后重启服务。
+#
+# 设计要点：
+#   · 刻意「整份重写」而不是用 sed 局部替换 —— 局部编辑 YAML 极易写坏文件，
+#     重写虽然啰嗦但结果确定、幂等。
+#   · 留空即保持原值。尤其是 IP 协议：留空必须沿用当前设置，
+#     不能像以前那样一律写回 true，否则用户只想改令牌也会被翻回双栈。
+#   · 改记录类型时逐条替换 type 字段，保留 name / ttl / proxy，
+#     避免把用户手工加的 TTL 或代理设置抹掉。
+set -u
+
+PKG_ETC="${TRIM_PKGETC:?缺少 TRIM_PKGETC}"
+CONF="${PKG_ETC}/config.yaml"
+
+W_TOKEN="${wizard_token:-}"
+W_ZONE="${wizard_zone:-}"
+W_RECORDS="${wizard_records:-}"
+W_IP_MODE="${wizard_ip_mode:-}"
+
+# 读取现有值作为兜底
+OLD_TOKEN=""
+OLD_ZONE=""
+if [ -f "$CONF" ]; then
+  OLD_TOKEN=$(sed -n 's/^token:[[:space:]]*//p' "$CONF" | head -n 1 | sed 's/^["'"'"']//; s/["'"'"']$//')
+  OLD_ZONE=$(sed -n 's/^zone:[[:space:]]*//p' "$CONF" | head -n 1 | sed 's/^["'"'"']//; s/["'"'"']$//')
+fi
+
+# 判断某个协议当前是否启用。
+# 没有配置文件、或配置里压根没有该项时，按程序默认值 true 处理
+# （与 cfddns 自身对缺省 enabled 的解释保持一致）。
+old_enabled() {
+  local key="$1" v=""
+  [ -f "$CONF" ] || { echo true; return; }
+  v=$(sed -n "/^${key}:/,/^[^[:space:]]/p" "$CONF" \
+      | sed -n 's/^[[:space:]]*enabled:[[:space:]]*//p' | head -n 1)
+  v=$(echo "$v" | tr -d '[:space:]')
+  case "$v" in
+    true | false) echo "$v" ;;
+    *) echo true ;;
+  esac
+}
+
+OLD_EN4=$(old_enabled ipv4)
+OLD_EN6=$(old_enabled ipv6)
+
+# 把模式翻译成「记录类型 + 两个探测开关」。
+# 二者必须同时设置：只改记录类型，另一协议的探测仍会运行；
+# 只改开关，both 类型仍会让程序去处理另一类记录。
+case "$W_IP_MODE" in
+  v4) REC_TYPE="A"    ; EN4=true  ; EN6=false ;;
+  v6) REC_TYPE="AAAA" ; EN4=false ; EN6=true  ;;
+  both) REC_TYPE="BOTH" ; EN4=true ; EN6=true ;;
+  *)
+    # 留空或非法值：保持原设置，记录类型也不动
+    REC_TYPE=""
+    EN4="$OLD_EN4"
+    EN6="$OLD_EN6"
+    ;;
+esac
+
+# 提取现有 records 段，用于「未填写记录名」时原样保留
+extract_records_block() {
+  [ -f "$CONF" ] || return 1
+  grep -q '^records:' "$CONF" || return 1
+  # 从 records: 起，到下一个顶格键（或文件末尾）为止
+  sed -n '/^records:/,/^[^[:space:]]/p' "$CONF" | sed '$d'
+}
+
+TMP="${CONF}.new"
+mkdir -p "$PKG_ETC" 2>/dev/null
+
+{
+  echo "# cfddns 配置（由应用设置向导更新）"
+  echo "# 与命令行版 cfddns 的配置格式完全一致，也可直接编辑本文件。"
+  echo
+  echo "# Cloudflare API 令牌"
+  echo "token: \"${W_TOKEN:-$OLD_TOKEN}\""
+  echo
+  echo "# 要绑定的域名（zone ID 由程序自动查询，不用填）"
+  echo "zone: \"${W_ZONE:-$OLD_ZONE}\""
+  echo
+  echo "# 要更新的记录：名字 或 名字: 类型（A / AAAA / BOTH）"
+  if [ -n "$W_RECORDS" ]; then
+    # 重新生成记录列表，类型按所选模式
+    TYPE_FOR_NEW="${REC_TYPE:-BOTH}"
+    echo "records:"
+    echo "$W_RECORDS" | tr ',' '\n' | while IFS= read -r r; do
+      r=$(echo "$r" | tr -d '[:space:]')
+      [ -z "$r" ] && continue
+      printf '  - name: %s\n    type: %s\n    ttl: 1\n' "$r" "$TYPE_FOR_NEW"
+    done
+  else
+    BLOCK=$(extract_records_block || true)
+    if [ -z "$BLOCK" ]; then
+      # 既没有既有记录、用户也没填：保持空列表，不凭空造一条记录
+      echo "records: []"
+    elif [ -n "$REC_TYPE" ]; then
+      # 保留原有记录，只把 type 换成新模式
+      # 只匹配记录项自己的 type 行（缩进后紧跟 type:），不会碰到其它字段
+      echo "$BLOCK" | sed "s/^\([[:space:]]*type:[[:space:]]*\).*/\1${REC_TYPE}/"
+    else
+      echo "$BLOCK"
+    fi
+  fi
+  echo
+  echo "# 公网 IP 探测"
+  echo "ipv4:"
+  echo "  enabled: ${EN4}"
+  echo "  source: auto"
+  echo "ipv6:"
+  echo "  enabled: ${EN6}"
+  echo "  source: auto"
+} >"$TMP"
+
+mv "$TMP" "$CONF"
+chmod 600 "$CONF" 2>/dev/null
+
+# 重启服务使配置生效
+CMD_MAIN="$(dirname "$(dirname "${TRIM_APPDEST}")")/cmd/main"
+if [ -x "$CMD_MAIN" ]; then
+  "$CMD_MAIN" start >/dev/null 2>&1 || \
+    echo "配置已更新，但服务未能自动启动，请在应用中心手动启动。" \
+      >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+fi
+
+exit 0

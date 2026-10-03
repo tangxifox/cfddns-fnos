@@ -1,0 +1,17 @@
+{
+  ".url": {
+    "cfddns.main": {
+      "title": "cfddns 动态域名",
+      "desc": "cfddns 动态域名（无网页界面）",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "port": "auto",
+      "gatewayPrefix": "/app/cfddns",
+      "gatewaySocket": "app.sock",
+      "url": "/app/cfddns",
+      "allUsers": true,
+      "noDisplay": true
+    }
+  }
+}

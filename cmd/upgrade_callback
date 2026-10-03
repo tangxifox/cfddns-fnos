@@ -1,0 +1,45 @@
+#!/bin/bash
+# 升级后：确认配置仍可解析，并重新启动服务。
+# 幂等；不动用户已有配置内容，只做必要补全。
+set -u
+
+PKG_ETC="${TRIM_PKGETC:?缺少 TRIM_PKGETC}"
+PKG_VAR="${TRIM_PKGVAR:?缺少 TRIM_PKGVAR}"
+PKG_TMP="${TRIM_PKGTMP:?缺少 TRIM_PKGTMP}"
+CMD_MAIN="$(dirname "$(dirname "${TRIM_APPDEST}")")/cmd/main"
+CONF="${PKG_ETC}/config.yaml"
+
+mkdir -p "$PKG_ETC" "$PKG_VAR" "$PKG_TMP" 2>/dev/null
+
+# 没有任何配置时补一份，避免升级后完全无法使用
+if [ ! -f "$CONF" ]; then
+  cat >"$CONF" <<'EOF'
+# cfddns 配置（升级时生成）
+token: ""
+zone: ""
+records:
+  - name: pc
+    type: both
+ipv4:
+  enabled: true
+  source: auto
+ipv6:
+  enabled: true
+  source: auto
+EOF
+  chmod 600 "$CONF" 2>/dev/null
+fi
+
+# 陈旧 socket 清理，避免升级后启动失败
+rm -f "${PKG_TMP}/app.sock" 2>/dev/null
+rm -f "${PKG_VAR}/cfddns.pid" 2>/dev/null
+
+if [ -x "$CMD_MAIN" ]; then
+  "$CMD_MAIN" start >/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "升级完成，但服务未能自动启动，请在应用中心手动启动。" \
+      >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+  fi
+fi
+
+exit 0

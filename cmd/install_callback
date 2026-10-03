@@ -1,0 +1,107 @@
+#!/bin/bash
+# 安装后：生成初始配置。
+#
+# 向导字段以同名环境变量传入：
+#   wizard_token     Cloudflare API 令牌
+#   wizard_zone      要绑定的域名
+#   wizard_records   记录名，多个用逗号分隔
+#   wizard_ip_mode   v4 / v6 / both，决定绑定哪类 IP
+#
+# 幂等：已存在配置时不覆盖，避免升级或重装冲掉用户设置。
+set -u
+
+PKG_ETC="${TRIM_PKGETC:?缺少 TRIM_PKGETC}"
+CONF="${PKG_ETC}/config.yaml"
+
+mkdir -p "$PKG_ETC" 2>/dev/null
+chmod 700 "$PKG_ETC" 2>/dev/null
+
+if [ -f "$CONF" ]; then
+  exit 0
+fi
+
+TOKEN="${wizard_token:-}"
+ZONE="${wizard_zone:-}"
+RECORDS="${wizard_records:-}"
+IP_MODE="${wizard_ip_mode:-both}"
+
+# 把模式翻译成「记录类型 + 各协议的探测开关」。
+#
+# 两者都要设置：只改记录类型的话，另一种协议的探测仍会运行并尝试写入
+# 记录（若同名记录已存在还会去更新它）；只改探测开关的话，记录类型留下的
+# both 会让程序仍去处理另一类记录。二者一致才是用户预期的结果。
+case "$IP_MODE" in
+  v4)
+    REC_TYPE="A"
+    EN4=true
+    EN6=false
+    ;;
+  v6)
+    REC_TYPE="AAAA"
+    EN4=false
+    EN6=true
+    ;;
+  both | *)
+    REC_TYPE="BOTH"
+    EN4=true
+    EN6=true
+    ;;
+esac
+
+# 生成记录段。
+#
+# 刻意不提供默认记录名：用户没填就不该凭空生成一条 —— 那会去改一个用户
+# 根本没打算动的域名。为空时写出 records: []，维护空列表，并附上写法说明。
+REC_BLOCK=$(echo "$RECORDS" | tr ',' '\n' | while IFS= read -r r; do
+  r=$(echo "$r" | tr -d '[:space:]')
+  [ -z "$r" ] && continue
+  printf '  - name: %s\n    type: %s\n    ttl: 1\n' "$r" "$REC_TYPE"
+done)
+
+if [ -z "$REC_BLOCK" ]; then
+  RECORDS_YAML="records: []"
+else
+  RECORDS_YAML="records:
+${REC_BLOCK}"
+fi
+
+cat >"$CONF" <<EOF
+# cfddns 配置（安装向导生成）
+# 与命令行版 cfddns 的配置格式完全一致，也可在「应用设置」中修改。
+
+# Cloudflare API 令牌
+token: "${TOKEN}"
+
+# 要绑定的域名（zone ID 由程序自动查询，不用填）
+zone: "${ZONE}"
+
+# 要更新的记录：名字 或 名字: 类型（A / AAAA / BOTH）
+#   pc 表示 pc.你的域名；@ 表示根域名；* 表示泛解析
+#   需要多条时每条形如：
+#     - name: nas
+#       type: A
+#       ttl: 1
+${RECORDS_YAML}
+
+# 公网 IP 探测
+ipv4:
+  enabled: ${EN4}
+  source: auto
+ipv6:
+  enabled: ${EN6}
+  source: auto
+EOF
+
+chmod 600 "$CONF" 2>/dev/null
+
+# 缺少必要内容时给出提示，便于用户到应用设置里补
+if [ -z "$TOKEN" ]; then
+  echo "应用已安装。请在「应用设置」中填写 Cloudflare API 令牌，否则无法同步。" \
+    >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+fi
+if [ -z "$REC_BLOCK" ]; then
+  echo "应用已安装，但尚未配置任何 DNS 记录。请在「应用设置」中填写要更新的记录名，否则不会同步任何记录。" \
+    >>"${TRIM_TEMP_LOGFILE:-/dev/null}"
+fi
+
+exit 0
